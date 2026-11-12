@@ -17,9 +17,7 @@ def check_password():
     def password_entered():
         if st.session_state["password"] == st.secrets["PASSWORD"]:
             st.session_state["password_correct"] = True
-            del st.session_state[
-                "password"
-            ]  # No guardar la clave en texto plano en sesión
+            del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
 
@@ -45,7 +43,7 @@ if not check_password():
     st.stop()
 
 # ==============================================================================
-# A PARTIR DE AQUÍ CORRE LA APLICACIÓN PRINCIPAL
+# APLICACIÓN PRINCIPAL
 # ==============================================================================
 
 DB_FILE = "base_tasa.db"
@@ -232,34 +230,42 @@ factor_subcon = st.sidebar.slider(
 coef_subcon = 1.0 + (factor_subcon / 100.0)
 
 st.sidebar.markdown("---")
-st.sidebar.subheader("3. Importar Excel a SQLite")
-archivo_excel = st.sidebar.file_uploader(
-    "Seleccionar archivo Excel (.xlsx)", type=["xlsx", "xls"]
+st.sidebar.subheader("3. Cargar Base de Datos (.db o .xlsx)")
+archivo_subido = st.sidebar.file_uploader(
+    "Subir base_tasa.db o Excel (.xlsx)", type=["db", "sqlite", "xlsx", "xls"]
 )
 
-if archivo_excel is not None:
-    try:
-        xls = pd.ExcelFile(archivo_excel)
-        hojas = xls.sheet_names
-        default_idx = (
-            hojas.index("BASE 2025 A 08,2026") if "BASE 2025 A 08,2026" in hojas else 0
-        )
-        hoja_sel = st.sidebar.selectbox("Hoja a importar", hojas, index=default_idx)
-        modo_imp = st.sidebar.radio(
-            "Modo de importación",
-            ["Reemplazar toda la base", "Agregar filas al final (Append)"],
-        )
-        if st.sidebar.button("🚀 Procesar e Importar a SQLite"):
-            with st.spinner("Importando datos e indexando base SQLite..."):
-                filas_imp = importar_excel_a_sqlite(
-                    archivo_excel, hoja_sel, modo=modo_imp
-                )
-            st.sidebar.success(
-                f"¡Listo! Se procesaron {filas_imp:,} registros en `{DB_FILE}`."
-            )
+if archivo_subido is not None:
+    nombre_arch = archivo_subido.name.lower()
+    if nombre_arch.endswith((".db", ".sqlite")):
+        if st.sidebar.button("🚀 Cargar Base SQLite"):
+            with open(DB_FILE, "wb") as f:
+                f.write(archivo_subido.getbuffer())
+            st.sidebar.success("¡Base SQLite cargada en memoria con éxito!")
             st.rerun()
-    except Exception as e:
-        st.sidebar.error(f"Error al leer el archivo: {e}")
+    else:
+        try:
+            xls = pd.ExcelFile(archivo_subido)
+            hojas = xls.sheet_names
+            default_idx = (
+                hojas.index("BASE 2025 A 08,2026")
+                if "BASE 2025 A 08,2026" in hojas
+                else 0
+            )
+            hoja_sel = st.sidebar.selectbox("Hoja a importar", hojas, index=default_idx)
+            modo_imp = st.sidebar.radio(
+                "Modo de importación",
+                ["Reemplazar toda la base", "Agregar filas al final (Append)"],
+            )
+            if st.sidebar.button("🚀 Procesar e Importar Excel"):
+                with st.spinner("Importando datos e indexando base SQLite..."):
+                    filas_imp = importar_excel_a_sqlite(
+                        archivo_subido, hoja_sel, modo=modo_imp
+                    )
+                st.sidebar.success(f"¡Listo! Se procesaron {filas_imp:,} registros.")
+                st.rerun()
+        except Exception as e:
+            st.sidebar.error(f"Error al leer el archivo: {e}")
 
 # Cálculos de Escenarios
 res_esc1 = calcular_pnl(
@@ -490,8 +496,8 @@ with tab_base:
     st.subheader("Explorador y Editor Directo sobre SQLite (`base_tasa.db`)")
 
     if not os.path.exists(DB_FILE):
-        st.warning(
-            f"No se encontró el archivo `{DB_FILE}`. Podés importar tu Excel directamente desde la sección **3. Importar Excel a SQLite** en la barra lateral."
+        st.info(
+            f"Aún no hay una base cargada en esta sesión. Subí tu archivo `base_tasa.db` o el Excel `.xlsx` desde la sección **3. Cargar Base de Datos** en la barra lateral."
         )
     else:
         col_f1, col_f2, col_f3 = st.columns(3)
