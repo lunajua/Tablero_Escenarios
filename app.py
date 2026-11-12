@@ -7,7 +7,7 @@ import sqlite3
 import os
 import io
 
-st.set_page_config(page_title="Simulador Escenarios Obras TASA", layout="wide")
+st.set_page_config(page_title="Simulador Económico Obras TASA", layout="wide")
 
 DB_FILE = "base_tasa.db"
 
@@ -48,17 +48,42 @@ def calcular_pnl(prod_hs, precio_promedio, sueldos_factor=1.0, subcontrato_facto
         "Margen %": margen_pct
     }
 
-# --- FUNCIONES DE ACCESO A SQLITE ---
+# --- FUNCIONES DE ACCESO A SQLITE E IMPORTACIÓN ---
 def get_db_connection():
     return sqlite3.connect(DB_FILE)
+
+def importar_excel_a_sqlite(uploaded_file, sheet_name, modo="Reemplazar toda la base"):
+    df = pd.read_excel(uploaded_file, sheet_name=sheet_name)
+    
+    # Limpiar formato de fecha
+    if 'dfecha' in df.columns:
+        df['dfecha'] = pd.to_datetime(df['dfecha'], errors='coerce').dt.strftime('%Y-%m-%d')
+    
+    conn = get_db_connection()
+    if_exists_mode = "replace" if modo == "Reemplazar toda la base" else "append"
+    
+    df.to_sql('movimientos', conn, if_exists=if_exists_mode, index=False)
+    
+    # Crear / actualizar índices
+    cursor = conn.cursor()
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_zona ON movimientos ("Zona Tasa");')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_cuenta ON movimientos ("Cuenta agrupada");')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_tipo ON movimientos ("Tipo Tasa");')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_fecha ON movimientos ("dfecha");')
+    conn.commit()
+    conn.close()
+    return len(df)
 
 def obtener_valores_unicos(columna):
     if not os.path.exists(DB_FILE):
         return []
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute(f'SELECT DISTINCT "{columna}" FROM movimientos WHERE "{columna}" IS NOT NULL ORDER BY "{columna}"')
-    items = [str(r[0]) for r in cursor.fetchall()]
+    try:
+        cursor.execute(f'SELECT DISTINCT "{columna}" FROM movimientos WHERE "{columna}" IS NOT NULL ORDER BY "{columna}"')
+        items = [str(r[0]) for r in cursor.fetchall()]
+    except Exception:
+        items = []
     conn.close()
     return items
 
@@ -82,12 +107,10 @@ def consultar_base(zona="TODAS", cuenta="TODAS", tipo="TODOS", limite=300):
         
     where_sql = " AND ".join(where_clauses)
     
-    # Contar total de registros filtrados
     cur = conn.cursor()
     cur.execute(f"SELECT COUNT(*) FROM movimientos WHERE {where_sql}", params)
     total_filtrado = cur.fetchone()[0]
     
-    # Obtener los datos con rowid para poder actualizar registros puntuales
     query = f"""
         SELECT rowid, dfecha, [nombre de las cuentas], OT, cnomcgotra, [Zona Tasa], 
                [Tipo Tasa], [Cuenta agrupada], TOTAL, Indices, [ARS Ajustados] 
@@ -120,7 +143,7 @@ if 'hs_esc1' not in st.session_state:
 if 'hs_esc2' not in st.session_state:
     st.session_state['hs_esc2'] = {"LA PLATA": 7400.0, "AMBA": 7700.0, "PBA": 11500.0}
 
-# --- BARRA LATERAL: PARÁMETROS Y ARCHIVOS ---
+# --- BARRA LATERAL: PARÁMETROS Y CARGA DE EXCEL ---
 st.sidebar.title("Configuración y Variables")
 
 st.sidebar.subheader("1. Tarifas y Precios")
@@ -134,6 +157,28 @@ coef_sueldo = 1.0 + (factor_sueldos / 100.0)
 
 factor_subcon = st.sidebar.slider("Variación Costo Subcontrato (%)", min_value=-50, max_value=50, value=0, step=1)
 coef_subcon = 1.0 + (factor_subcon / 100.0)
+
+st.sidebar.markdown("---")
+st.sidebar.subheader("3. Importar Excel a SQLite")
+archivo_excel = st.sidebar.file_uploader("Seleccionar archivo Excel (.xlsx)", type=["xlsx", "xls"])
+
+if archivo_excel is not None:
+    try:
+        xls = pd.ExcelFile(archivo_excel)
+        hojas = xls.sheet_names
+        default_idx = hojas.index('BASE 2025 A 08,2026') if 'BASE 2025 A 08,2026' in hojas else 0
+        hoja_sel = st.sidebar.selectbox("Hoja a importar", hojas, index=default_idx)
+        modo_imp = st.sidebar.radio(
+            "Modo de importación",
+            ["Reemplazar toda la base", "Agregar filas al final (Append)"]
+        )
+        if st.sidebar.button("🚀 Procesar e Importar a SQLite"):
+            with st.spinner("Importando datos e indexando base SQLite..."):
+                filas_imp = importar_excel_a_sqlite(archivo_excel, hoja_sel, modo=modo_imp)
+            st.sidebar.success(f"¡Listo! Se procesaron {filas_imp:,} registros en `{DB_FILE}`.")
+            st.rerun()
+    except Exception as e:
+        st.sidebar.error(f"Error al leer el archivo: {e}")
 
 # Cálculos de Escenarios
 res_esc1 = calcular_pnl(
@@ -170,7 +215,7 @@ with tab_dashboard:
     st.markdown("---")
 
     if modo_vista == "Escenario 1 (Personal Propio + Subcontratos)":
-        st.info(" Mostrando **ESCENARIO 1**: Se absorbe personal del subcontrato y se sostiene el nivel de producción (~57.000 hs/mes). Mantiene costo de subcontratos activo.")
+        st.info("Mostrando **ESCENARIO 1**: Se absorbe personal del subcontrato y se sostiene el nivel de producción (~57.000 hs/mes). Mantiene costo de subcontratos activo.")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Ventas Totales", f"${res_esc1['Ventas']:,.0f}", f"{int(sum(st.session_state['hs_esc1'].values())):,} hs")
         col2.metric("Costos Totales", f"${abs(res_esc1['Costos Totales']):,.0f}")
@@ -178,7 +223,7 @@ with tab_dashboard:
         col4.metric("Margen Neto", f"{res_esc1['Margen %']:.2f}%")
         
     elif modo_vista == "Escenario 2 (Solo Personal Propio)":
-        st.warning(" Mostrando **ESCENARIO 2**: Se mantiene exclusivamente personal propio con caída en el nivel de producción (~26.600 hs/mes). Subcontratos = $0 con absorción salarial del +8%.")
+        st.warning("Mostrando **ESCENARIO 2**: Se mantiene exclusivamente personal propio con caída en el nivel de producción (~26.600 hs/mes). Subcontratos = $0 con absorción salarial del +8%.")
         col1, col2, col3, col4 = st.columns(4)
         col1.metric("Ventas Totales", f"${res_esc2['Ventas']:,.0f}", f"{int(sum(st.session_state['hs_esc2'].values())):,} hs")
         col2.metric("Costos Totales", f"${abs(res_esc2['Costos Totales']):,.0f}")
@@ -268,9 +313,8 @@ with tab_base:
     st.subheader("Explorador y Editor Directo sobre SQLite (`base_tasa.db`)")
     
     if not os.path.exists(DB_FILE):
-        st.warning(f"No se encontró el archivo `{DB_FILE}`. Ejecutá primero el script `crear_base_sqlite.py`.")
+        st.warning(f"No se encontró el archivo `{DB_FILE}`. Podés importar tu Excel directamente desde la sección **3. Importar Excel a SQLite** en la barra lateral.")
     else:
-        # Menús desplegables con valores únicos traídos por SQL
         col_f1, col_f2, col_f3 = st.columns(3)
         with col_f1:
             zonas = ["TODAS"] + obtener_valores_unicos("Zona Tasa")
@@ -286,14 +330,13 @@ with tab_base:
         with col_l1:
             limite_rows = st.number_input("Filas a cargar", min_value=50, max_value=2000, value=250, step=50)
 
-        # Consulta SQL optimizada
         df_sql, total_coincidencias = consultar_base(sel_zona, sel_cuenta, sel_tipo, limite=limite_rows)
         
         st.caption(f"Registros coincidentes encontrados: **{total_coincidencias:,}** (mostrando primeros {len(df_sql)}).")
 
         cols_editables = ['TOTAL', 'Indices', 'ARS Ajustados', 'cnomcgotra', 'Cuenta agrupada']
         
-        st.info(" Editá las celdas en la grilla y presioná **'Guardar Cambios en SQLite'** para impactar directamente en el archivo `.db`.")
+        st.info("Editá las celdas en la grilla y presioná **'Guardar Cambios en SQLite'** para impactar directamente en el archivo `.db`.")
 
         datos_editados = st.data_editor(
             df_sql,
@@ -306,7 +349,6 @@ with tab_base:
         col_b1, col_b2 = st.columns([1, 1])
         with col_b1:
             if st.button("💾 Guardar Cambios en SQLite"):
-                # Detectar solo filas modificadas comparando contra df_sql original
                 cambios = 0
                 for idx, row in datos_editados.iterrows():
                     orig_row = df_sql.loc[idx]
@@ -326,7 +368,6 @@ with tab_base:
                     st.info("No se detectaron modificaciones en las celdas editables.")
 
         with col_b2:
-            # Descargar resultados filtrados como CSV
             csv_data = df_sql.drop(columns=['rowid']).to_csv(index=False).encode('utf-8')
             st.download_button(
                 label="📥 Descargar Vista Filtrada (CSV)",
