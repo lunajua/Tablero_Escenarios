@@ -7,7 +7,7 @@ import sqlite3
 import os
 import io
 
-st.set_page_config(page_title="Simulador Económico Obras TASA", layout="wide")
+st.set_page_config(page_title="Simulador Escenarios - Obras TASA", layout="wide")
 
 
 # --- SISTEMA DE AUTENTICACIÓN ---
@@ -24,7 +24,7 @@ def check_password():
     if st.session_state.get("password_correct", False):
         return True
 
-    st.title("Acceso Restringido - Tablero TASA")
+    st.title("Acceso Restringido - Simulador de Escenarios TASA")
     st.text_input(
         "Ingresá la contraseña de acceso:",
         type="password",
@@ -293,7 +293,7 @@ tab_dashboard, tab_editor, tab_base = st.tabs(
 
 # --- TAB 1: DASHBOARD COMPARATIVO ---
 with tab_dashboard:
-    st.title("Simulador Financiero de Obras (TASA)")
+    st.title("Simulador de Escenarios - Obras (TASA)")
 
     modo_vista = st.radio(
         "Seleccionar Escenario a Analizar en Detalle:",
